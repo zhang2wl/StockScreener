@@ -74,7 +74,7 @@ class StockDataDownloader:
 
     def update_SP500_data(self):
         """Fetches, processes, and updates data for all S&P 500 tickers."""
-        tickers = self.fetch_sp500_tickers()
+        tickers = fetch_sp500_tickers()
         for ticker in tickers:
             self.fetch_and_process_stock_data(ticker)
 

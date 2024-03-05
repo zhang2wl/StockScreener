@@ -122,3 +122,110 @@ class StockAnalyzer:
             return True
 
         return False
+
+    def volume_boost(self):
+        """
+        Checks if there is a week in the past two months where the trading volume
+        is more than twice the 50-day moving average volume.
+        """
+        # Ensure there's at least 50 days of data to calculate the average
+        if len(self.df) < 50:
+            print("Insufficient data for 50-day average volume calculation.")
+            return False
+
+        # Calculate the 50-day average volume if not already present
+        if 'Volume50' not in self.df.columns:
+            self.df['Volume50'] = self.df['Volume'].rolling(window=50).mean()
+
+        # Focus on the last two months (approximately 40 trading days)
+        recent_df = self.df[-40:]
+
+        # Resample to weekly data, summing the volume
+        weekly_volumes = recent_df['Volume'].resample('W').sum()
+
+        # Check if any week's volume is more than twice the 50-day average
+        for week_volume in weekly_volumes:
+            if week_volume > 2 * recent_df['Volume50'].mean():
+                return True
+
+        return False
+
+    def mark_local_extrema(self):
+        """
+        Marks local minima and maxima in the closing price curve.
+        Local minima are marked with -1, local maxima with 1, and all other points with 0.
+        """
+        prices = self.df['Close'].tolist()
+        self.df['extrema'] = 0  # Initialize all points as neither (0)
+
+        for i in range(1, len(prices) - 1):
+            # Check for local maximum
+            if prices[i] > prices[i - 1] and prices[i] > prices[i + 1]:
+                self.df.at[self.df.index[i], 'extrema'] = 1
+            # Check for local minimum
+            elif prices[i] < prices[i - 1] and prices[i] < prices[i + 1]:
+                self.df.at[self.df.index[i], 'extrema'] = -1
+
+        return self.df
+
+    def wedge_breakout(self):
+        """
+        Tests for a wedge breakout pattern over the past two months.
+        """
+        recent_df = self.df[-40:]  # Focus on the last 40 trading days
+
+        # Extract indices where local maxima (1) and minima (-1) occur
+        max_indices = recent_df[recent_df['extrema'] == 1].index
+        min_indices = recent_df[recent_df['extrema'] == -1].index
+
+        if len(max_indices) < 2 or len(min_indices) < 2:
+            # Not enough extrema to determine pattern
+            return False
+
+        # Check local highs for horizontal consistency
+        max_values = recent_df.loc[max_indices, 'Close']
+        slope, _, _, _, _ = linregress(range(len(max_values)), max_values)
+
+        # Assuming a tolerance for the slope to still be considered 'horizontal'
+        if abs(slope) < 0.0:
+            # Local highs are decreasing
+            return False
+
+        # Check for increasing local lows
+        min_values = recent_df.loc[min_indices, 'Close']
+        low_slope, _, _, _, _ = linregress(range(len(min_values)), min_values)
+
+        if low_slope <= 0:
+            # Local lows are not increasing
+            return False
+
+        return True
+
+    def calculate_bollinger_bands(self, window=20, num_std=2):
+        """
+        Calculates Bollinger Bands for the stock data.
+
+        :param window: The moving average window size. Defaults to 20.
+        :param num_std: The number of standard deviations for the upper and lower bands. Defaults to 2.
+        """
+        self.df['MiddleBB'] = self.df['Close'].rolling(window=window).mean()  # Middle Band
+        self.df['STD'] = self.df['Close'].rolling(window=window).std()
+
+        self.df['UpperBB'] = self.df['MiddleBB'] + (self.df['STD'] * num_std)  # Upper Band
+        self.df['LowerBB'] = self.df['MiddleBB'] - (self.df['STD'] * num_std)  # Lower Band
+
+    def is_squeeze_expansion(self):
+        """
+        Checks for 'squeeze expansion' pattern in Bollinger Bands.
+
+        Returns True if the middle band is trending up and the lower band is trending down.
+        """
+        # Assuming Bollinger Bands have been calculated
+        if 'MiddleBB' not in self.df.columns or 'LowerBB' not in self.df.columns:
+            self.calculate_bollinger_bands()
+
+        # Check the trend of the Middle and Lower Bollinger Bands
+        middle_trend = self.df['MiddleBB'].iloc[-2:].is_monotonic_increasing
+        lower_trend = self.df['LowerBB'].iloc[-2:].is_monotonic_decreasing
+
+        return middle_trend and lower_trend

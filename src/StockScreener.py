@@ -27,11 +27,24 @@ class StockScreener:
             df = self.data_downloader.get_data_as_dataframe(ticker)
             if not df.empty:
                 analyzer = StockAnalyzer(df)
-                if analyzer.is_in_stage_2() and analyzer.has_volume_contraction() \
-                    and analyzer.check_recent_contraction():
+                if analyzer.is_in_stage_2() \
+                    and analyzer.volume_boost():
+                    # and analyzer.has_volume_contraction()
+                    # and analyzer.check_recent_contraction():
                     stage2_stocks.append(ticker)
         self._save_stage2_stocks_to_db(stage2_stocks)
         return stage2_stocks
+
+    def find_squeeze_expansion_stocks(self):
+        """Finds and saves Stage 2 stocks to the database."""
+        squeeze_expansion_stocks = []
+        for ticker in self.tickers:
+            df = self.data_downloader.get_data_as_dataframe(ticker)
+            if not df.empty:
+                analyzer = StockAnalyzer(df)
+                if analyzer.is_squeeze_expansion():
+                    squeeze_expansion_stocks.append(ticker)
+        return squeeze_expansion_stocks
 
     def _save_stage2_stocks_to_db(self, tickers):
         """Saves the list of Stage 2 stocks to the SQLite database."""
