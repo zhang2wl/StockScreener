@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
-from StockDataDownloader import fetch_sp500_tickers
+# from StockDataDownloader import fetch_sp500_tickers
 from scipy.stats import linregress
+import mplfinance as mpf
 
 class StockAnalyzer:
     def __init__(self, df):
@@ -214,6 +215,9 @@ class StockAnalyzer:
         self.df['UpperBB'] = self.df['MiddleBB'] + (self.df['STD'] * num_std)  # Upper Band
         self.df['LowerBB'] = self.df['MiddleBB'] - (self.df['STD'] * num_std)  # Lower Band
 
+        # Calculate Bollinger Bandwidth as a percentage of the Middle Band
+        self.df['BBWidth'] = ((self.df['UpperBB'] - self.df['LowerBB']) / self.df['MiddleBB']) * 100
+
     def is_squeeze_expansion(self):
         """
         Checks for 'squeeze expansion' pattern in Bollinger Bands.
@@ -225,7 +229,148 @@ class StockAnalyzer:
             self.calculate_bollinger_bands()
 
         # Check the trend of the Middle and Lower Bollinger Bands
-        middle_trend = self.df['MiddleBB'].iloc[-2:].is_monotonic_increasing
-        lower_trend = self.df['LowerBB'].iloc[-2:].is_monotonic_decreasing
+        middle_trend = self.df['MiddleBB'].iloc[-3:].is_monotonic_increasing
+        lower_trend = self.df['LowerBB'].iloc[-3:].is_monotonic_decreasing
 
-        return middle_trend and lower_trend
+        # Check if the minimum Bandwidth of the last 3 days is the lowest in the last 60 days
+        last_3_days_min_bbwidth = self.df['BBWidth'].iloc[-3:].min()
+        last_60_days_min_bbwidth = self.df['BBWidth'].iloc[-60:].min()
+
+        bbwidth_criterion = last_3_days_min_bbwidth <= last_60_days_min_bbwidth*1.05
+
+        return middle_trend and lower_trend and bbwidth_criterion
+
+    def is_squeeze_expansion(self):
+        """
+        Checks for 'squeeze expansion' pattern in Bollinger Bands.
+
+        Returns True if the middle band is trending up and the lower band is trending down.
+        """
+        # Assuming Bollinger Bands have been calculated
+        if 'MiddleBB' not in self.df.columns or 'LowerBB' not in self.df.columns:
+            self.calculate_bollinger_bands()
+
+        # Check the trend of the Middle and Lower Bollinger Bands
+        middle_trend = self.df['MiddleBB'].iloc[-3:].is_monotonic_increasing
+        lower_trend = self.df['LowerBB'].iloc[-3:].is_monotonic_decreasing
+
+        # Check if the minimum Bandwidth of the last 3 days is the lowest in the last 60 days
+        last_3_days_min_bbwidth = self.df['BBWidth'].iloc[-3:].min()
+        last_60_days_min_bbwidth = self.df['BBWidth'].iloc[-60:].min()
+
+        bbwidth_criterion = last_3_days_min_bbwidth <= last_60_days_min_bbwidth*1.05
+
+        return middle_trend and lower_trend and bbwidth_criterion
+
+    def plot_with_bollinger_bands(self, plot_df, occurrences):
+        # Create a list of Bollinger Bands for the 'addplot' argument
+        ap = [
+            mpf.make_addplot(plot_df['UpperBB'], color='g', linestyle='dashdot' , width=0.75),  # Upper Bollinger Band
+            mpf.make_addplot(plot_df['MiddleBB'], color='b', linestyle='dashdot', width=0.75),  # Middle Bollinger Band
+            mpf.make_addplot(plot_df['LowerBB'], color='r', linestyle='dashdot' , width=0.75),  # Lower Bollinger Band
+        ]
+
+        # Calculate min and max for y-axis limits
+        price_min = plot_df[['Low', 'LowerBB']].min().min()
+        price_max = plot_df[['High', 'UpperBB']].max().max()
+
+        # # Add a vertical line on the squeeze expansion day
+        # vline = [(squeeze_day, plot_df['Low'].min(), squeeze_day, plot_df['High'].max())]
+
+        # Plot configuration
+        mpf.plot(plot_df,
+            type='candle',
+            style='charles',
+            volume=True,
+            title=f"Squeeze Expansion Occurrence {occurrences}",
+            addplot=ap,
+            # alines=vline,  # Adding the vertical line
+            figratio=(12, 8),
+            figscale=1.2,
+            panel_ratios=(6,3),
+            show_nontrading=False,
+            ylim=(price_min, price_max))  # Set y-axis limits to match price range)
+
+    def calculate_alligator(self):
+        # Williams Alligator parameters
+        jaw_length = 13
+        teeth_length = 8
+        lips_length = 5
+
+        # Smoothed Moving Averages (SMMA)
+        self.df['Jaw'] = self.df['Close'].rolling(window=jaw_length, min_periods=1).mean().shift(8)
+        self.df['Teeth'] = self.df['Close'].rolling(window=teeth_length, min_periods=1).mean().shift(5)
+        self.df['Lips'] = self.df['Close'].rolling(window=lips_length, min_periods=1).mean().shift(3)
+
+    def sliding_window_analysis(self, win_threshold=0.1, window=14):
+        successes = 0
+        occurrences = 0
+        self.calculate_bollinger_bands()
+        self.df['Date'] = pd.to_datetime(self.df['Date'])
+        self.df.set_index('Date', inplace=True)
+
+        # Start from day 61 to have 60 days of data for calculating the lowest BBWidth
+        for i in range(60, len(self.df)-window):  # Leave 14 days at the end for the price increase check
+            window_end = i + 1  # +1 because the upper bound is exclusive
+
+            # Check the trend of the Middle and Lower Bollinger Bands
+            check_start = -3+window_end
+            check_end = window_end
+
+            middle_trend = self.df['MiddleBB'].iloc[check_start:check_end].is_monotonic_increasing
+            lower_trend = self.df['LowerBB'].iloc[check_start:check_end].is_monotonic_decreasing
+
+            # Check if the minimum Bandwidth of the last 3 days is the lowest in the last 60 days
+            last_2_days_min_bbwidth = self.df['BBWidth'].iloc[check_start:check_end].min()
+            last_60_days_min_bbwidth = self.df['BBWidth'].iloc[-60+window_end:window_end+1].min()
+
+            bbwidth_criterion = last_2_days_min_bbwidth <= last_60_days_min_bbwidth*1.05
+
+            squeeze_expansion = middle_trend and lower_trend and bbwidth_criterion
+
+            # Check if the squeeze expansion condition is met
+            if squeeze_expansion:
+                occurrences += 1
+
+                # Check for a 10% price increase in the following 14 data points
+                current_price = self.df.iloc[i]['Close']
+                future_prices = self.df.iloc[i+1:i+window+1]['Close']  # Next 14 days
+                max_future_price = future_prices.max()
+
+                if max_future_price >= (1+win_threshold) * current_price:
+                    successes += 1
+
+                # if occurrences <=5:
+                #     # Define the plot window including the squeeze event and the following window days
+                #     plot_df = self.df.iloc[i-10:i+window+1]  # Plot 20 days before the event for context and window days after
+
+                #     self.plot_with_bollinger_bands(plot_df, occurrences)
+
+        success_rate = successes / occurrences if occurrences else 0
+        # print(f"Occurrences = {occurrences}, successes = {successes}, winrate = {success_rate}")
+        return (occurrences, successes, success_rate)
+
+
+    def sliding_window_alligator_analysis(self, threshold=0.05,window=14):
+        self.calculate_alligator()
+        successes = 0
+        occurrences = 0
+
+        # Start from the point where the Alligator Indicator can be calculated
+        for i in range(13, len(self.df)-window):
+            # Check for a Lips crossover above Teeth and Jaw (Buy Signal)
+            if self.df.iloc[i]['Lips'] > self.df.iloc[i]['Teeth'] and self.df.iloc[i]['Lips'] > self.df.iloc[i]['Jaw']:
+                # This is where the signal occurs; we mark it as an occurrence
+                occurrences += 1
+
+                # Check for a 10% price increase in the following window days
+                current_price = self.df.iloc[i]['Close']
+                future_prices = self.df.iloc[i+1:i+window+1]['Close']
+                max_future_price = future_prices.max()
+
+                if max_future_price >= (1+threshold) * current_price:
+                    successes += 1
+
+        success_rate = successes / occurrences if occurrences else 0
+        # print(f"Alligator Strategy - Occurrences: {occurrences}, Successes: {successes}, Success Rate: {success_rate:.2%}")
+        return (occurrences, successes, success_rate)
